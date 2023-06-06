@@ -1,0 +1,132 @@
+192.168.122.41 - dhcp server = tftp server = http server
+192.168.122.1 - gateway
+
+==============================================================================
+
+
+#dhcp server
+
+cat /etc/dhcp/dhcpd.conf
+
+option space pxelinux;
+option pxelinux.magic code 208 = string;
+option pxelinux.configfile code 209 = text;
+option pxelinux.pathprefix code 210 = text;
+option pxelinux.reboottime code 211 = unsigned integer 32;
+option architecture-type code 93 = unsigned integer 16;
+#allow bootp;
+
+subnet 192.168.122.0 netmask 255.255.255.0 {
+	option routers 192.168.122.1;
+	range 192.168.122.200 192.168.122.220;
+	option broadcast-address 192.169.122.255;
+	default-lease-time 600;
+	max-lease-time 7200;
+
+
+	class "pxeclients" {
+	  match if substring (option vendor-class-identifier, 0, 9) = "PXEClient";
+	  next-server 192.168.122.41;
+
+	  if option architecture-type = 00:07 {
+	    filename "uefi/shim.efi";
+	    } else {
+	    filename "pxelinux/pxelinux.0";
+	  }
+	}
+}
+
+
+
+================================================================================
+#web server
+
+#copy the iso content for http server 
+mount /dev/sr0 /mnt
+cp -av * /var/www/html/.
+
+
+#prepare kick start file, we can generate kickstart file with the link  "https://access.redhat.com/labs/kickstartconfig/"
+cat /var/www/html/centos7.cfg
+lang en_US
+keyboard us
+timezone America/New_York --isUtc
+rootpw $1$ZPQYtg$R5uvM.fWnaqmlHHS8mGYq. --iscrypted
+
+#graphical or text
+text
+
+
+#reboot after the os install, reboot command will reboot or skip it.
+#reboot
+
+#installation source cdrom or url --url=http://192.168.122.41
+#cdrom
+url --url=http://192.168.122.41
+
+
+#partition
+bootloader --append="rhgb quiet crashkernel=auto" --boot-drive=vda 
+
+#clear MBR and clear all partion
+zerombr
+clearpart --all --initlabel
+
+#partition
+#primary partition
+part /boot --fstype xfs --size=300
+
+#pv and cg creation
+part pv.01 --size=1 --grow
+volgroup centos pv.01
+
+logvol swap --fstype swap --name=swap --vgname=centos --size=1024
+logvol /home --fstype ext4 --name=home --vgname=centos --size=6144 
+logvol / --fstype ext4 --name=root --vgname=centos --size=1 --grow
+
+
+auth --passalgo=sha512 --useshadow
+network --bootproto=dhcp
+skipx
+firstboot --disable
+selinux --disabled
+%packages
+@^minimal
+kexec-tools
+%end
+
+
+=================================================================================
+cp /mnt/images/pxeboot/{vmlinuz,initrd.img} /var/lib/tftpboot/pxelinux/images/CentOS-7/.
+
+tree -L 4 /var/lib/tftpboot/
+/var/lib/tftpboot/
+`-- pxelinux
+    |-- images
+    |   `-- CentOS-7
+    |       |-- initrd.img
+    |       `-- vmlinuz
+    |-- pxelinux.0
+    `-- pxelinux.cfg
+        `-- default
+
+
+======================================================================================
+
+cat /var/lib/tftpboot/pxelinux/pxelinux.cfg/default 
+default linux
+prompt 1
+timeout 30
+
+label linux
+  menu label ^Install system
+  menu default
+  kernel /images/CentOS-7/vmlinuz
+  append initrd=/images/CentOS-7/initrd.img inst.repo=http://192.168.122.41/ ks=http://192.168.122.41/centos7.cfg
+
+
+==============================================================================================
+
+systemctl start tftp.socket
+systemctl start httpd
+systemctl restart dhcpd
